@@ -1,5 +1,5 @@
-fastapi
-uvicorn
-torch
-sentencepiece
-pydantic
+fastapi>=0.110,<1
+uvicorn>=0.29,<1
+torch>=2.2,<3
+sentencepiece>=0.2.0,<1
+pydantic>=2,<3
