@@ -10,6 +10,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from preprocess import preprocess_th, restore_unknown
+
 torch.set_num_threads(int(os.getenv("TORCH_THREADS", "1")))
 torch.set_num_interop_threads(1)
 device = torch.device("cpu")
@@ -386,7 +388,7 @@ def translate_long_text(model, text: str, target_sp) -> str:
         parts = []
         for chunk_text, starts_sentence in chunks:
             out_ids = greedy_translate(model, encode_text(chunk_text, target_sp))
-            piece = decode_ids(out_ids, target_sp).strip()
+            piece = restore_unknown(decode_ids(out_ids, target_sp), chunk_text, target_sp).strip()
             if not piece:
                 continue
             parts.append(capitalize_first(piece) if starts_sentence else piece)
@@ -445,5 +447,7 @@ def translate(req: TranslationRequest):
     if len(input_text) > MAX_INPUT_CHARS:
         raise HTTPException(status_code=413, detail=f"ข้อความยาวเกิน {MAX_INPUT_CHARS} ตัวอักษร")
 
+    # แปลงตัวย่อเดือน/วัน ปี พ.ศ. เวลา และเลขไทย ให้เป็นรูปแบบที่โมเดลแปลได้ (ดู preprocess.py)
+    input_text = preprocess_th(input_text)
     result = translate_long_text(model_th_en, input_text, sp_th_en)
     return TranslationResponse(translated_text=result, direction="th-en")
