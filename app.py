@@ -57,6 +57,28 @@ EOS_ID = sp_th_en.eos_id() if sp_th_en.eos_id() != -1 else 3
 # ---------------------------------------------------------------------------
 # Model (เหมือน notebook Cell 6)
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# แปลงชื่อ layer ของ checkpoint ให้ตรงกับคลาสนี้
+# notebook Kaggle รุ่นใหม่ตั้งชื่อ LayerNorm เป็น n1..n4 และ attention ของ encoder เป็น attn
+# ส่วนคลาสใน repo นี้ใช้ norm1..norm4 / self_attn  (สถาปัตยกรรมเหมือนกันทุกอย่าง ต่างแค่ชื่อ)
+# ฟังก์ชันนี้ทำให้โหลดได้ทั้ง checkpoint รุ่นเก่าและรุ่นใหม่
+# ---------------------------------------------------------------------------
+_STATE_DICT_RENAMES = [
+    (re.compile(r"^(encoder_layers\.\d+)\.attn\."), r"\1.self_attn."),
+    (re.compile(r"^((?:en|de)coder_layers\.\d+)\.n(\d)\."), r"\1.norm\2."),
+]
+
+
+def normalize_state_dict_keys(state_dict):
+    out = {}
+    for k, v in state_dict.items():
+        for pat, repl in _STATE_DICT_RENAMES:
+            k = pat.sub(repl, k)
+        out[k] = v
+    return out
+
+
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=MAX_LEN, dropout=0.1):
         super().__init__()
@@ -216,7 +238,7 @@ def load_checkpoint_safe(model_path, target_vocab_size):
         )
 
     model = RNNAugmentedTransformer(vocab_size=target_vocab_size).to(device)
-    model.load_state_dict(state_dict)
+    model.load_state_dict(normalize_state_dict_keys(state_dict))
     model.eval()
 
     if isinstance(ckpt, dict):
