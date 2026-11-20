@@ -9,9 +9,8 @@ import torch.nn as nn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
 
-from preprocess import preprocess_th, restore_unknown, unknown_spans
+from preprocess import preprocess_th, restore_unknown
 
 torch.set_num_threads(int(os.getenv("TORCH_THREADS", "1")))
 torch.set_num_interop_threads(1)
@@ -381,30 +380,15 @@ def split_into_paragraphs(text, sp, limit=SRC_CHUNK_TOKENS):
     return paragraphs
 
 
-# ---------------------------------------------------------------------------
-# ดูการตัดคำ (debug)
-# ตั้ง ENABLE_DEBUG=false บน Render เพื่อปิด /tokenize และ debug ใน /translate
-# ---------------------------------------------------------------------------
-DEBUG_ENABLED = os.getenv("ENABLE_DEBUG", "true").strip().lower() not in ("0", "false", "no")
-
-
-def describe_tokens(ids, sp):
-    return [{"id": int(i), "piece": sp.id_to_piece(int(i))} for i in ids]
-
-
-def translate_long_text(model, text: str, target_sp, trace=None) -> str:
+def translate_long_text(model, text: str, target_sp) -> str:
     if not text or not text.strip():
         return ""
     out_paragraphs = []
     for chunks in split_into_paragraphs(text.strip(), target_sp):
         parts = []
         for chunk_text, starts_sentence in chunks:
-            src_ids = encode_text(chunk_text, target_sp)
-            out_ids = greedy_translate(model, src_ids)
+            out_ids = greedy_translate(model, encode_text(chunk_text, target_sp))
             piece = restore_unknown(decode_ids(out_ids, target_sp), chunk_text, target_sp).strip()
-            if trace is not None:
-                trace.append({"chunk": chunk_text, "source_tokens": describe_tokens(src_ids, target_sp),
-                              "output_tokens": describe_tokens(out_ids, target_sp), "output_text": piece})
             if not piece:
                 continue
             parts.append(capitalize_first(piece) if starts_sentence else piece)
@@ -431,13 +415,11 @@ app.add_middleware(
 class TranslationRequest(BaseModel):
     text: str
     direction: str = "th-en"
-    debug: bool = False  # true = แนบผลการตัดคำมาใน response
 
 
 class TranslationResponse(BaseModel):
     translated_text: str
     direction: str
-    debug: Optional[dict] = None
 
 
 @app.get("/")
@@ -451,7 +433,7 @@ def health_check():
     }
 
 
-@app.post("/translate", response_model=TranslationResponse, response_model_exclude_none=True)
+@app.post("/translate", response_model=TranslationResponse)
 def translate(req: TranslationRequest):
     direction = req.direction.strip().lower()
     input_text = req.text.strip()
@@ -467,31 +449,5 @@ def translate(req: TranslationRequest):
 
     # แปลงตัวย่อเดือน/วัน ปี พ.ศ. เวลา และเลขไทย ให้เป็นรูปแบบที่โมเดลแปลได้ (ดู preprocess.py)
     input_text = preprocess_th(input_text)
-    trace = [] if (req.debug and DEBUG_ENABLED) else None
-    result = translate_long_text(model_th_en, input_text, sp_th_en, trace=trace)
-    debug = {"preprocessed_text": input_text, "chunks": trace} if trace is not None else None
-    return TranslationResponse(translated_text=result, direction="th-en", debug=debug)
-
-
-class TokenizeRequest(BaseModel):
-    text: str
-
-
-@app.post("/tokenize")
-def tokenize(req: TokenizeRequest):
-    """ดูว่า SentencePiece ตัดข้อความเป็นชิ้นคำย่อย (subword) อย่างไร โดยไม่แปล"""
-    if not DEBUG_ENABLED:
-        raise HTTPException(status_code=404, detail="ปิดการใช้งาน debug อยู่ (ENABLE_DEBUG=false)")
-    original = req.text.strip()
-    if len(original) > MAX_INPUT_CHARS:
-        raise HTTPException(status_code=413, detail=f"ข้อความยาวเกิน {MAX_INPUT_CHARS} ตัวอักษร")
-    pre = preprocess_th(original)
-    ids = sp_th_en.encode(pre, out_type=int)
-    return {
-        "original_text": original,
-        "preprocessed_text": pre,
-        "token_count": len(ids),
-        "tokens": describe_tokens(ids, sp_th_en),
-        "pieces_joined": " | ".join(sp_th_en.id_to_piece(i) for i in ids),
-        "unknown_characters": unknown_spans(pre, sp_th_en),
-    }
+    result = translate_long_text(model_th_en, input_text, sp_th_en)
+    return TranslationResponse(translated_text=result, direction="th-en")
